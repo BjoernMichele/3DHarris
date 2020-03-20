@@ -164,7 +164,6 @@ def normalize_point_cloud(points, idx_v):
 
     Returns transformed points
     '''
-    pass
 
     # center on centroid
     centroid = np.mean(points, axis=0)

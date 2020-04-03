@@ -4,7 +4,8 @@ import scipy
 from sklearn.neighbors import KDTree
 from scipy.spatial.transform import Rotation
 import numpy as np
-
+from numba import jit
+import numba
 #Taken from https://stackoverflow.com/questions/12374781/how-to-find-all-neighbors-of-a-given-point-in-a-delaunay-triangulation-using-sci?rq=1
 def find_neighbors(pindex, triang):
     return triang.vertex_neighbor_vertices[1][triang.vertex_neighbor_vertices[0][pindex]:triang.vertex_neighbor_vertices[0][pindex+1]]
@@ -12,20 +13,24 @@ def find_neighbors(pindex, triang):
 
 
 class Meshgrid:
-    def __init__(self, np_position_array, graph):
-        self.points = np_position_array
-        self.graph = graph
-        self.kdtree = None
-        self.harris_values = None
-
-
-    def __init__(self,np_position_array):
+    
+    def __init__(self,np_position_array, graph = None):
         #Param: np_position_array:
         self.points = np_position_array
         self.np_position_array = np_position_array
-        self.graph = self.create_graph(np_position_array)
+        if graph is None:  
+            self.graph = self.create_graph(np_position_array)
+        else: 
+            self.graph = graph
         self.kdtree = None
         self.harris_values = None
+        self.calculate_size(self.points)
+
+    def calculate_size(self, np_position_array): 
+        self.width = np.max(np_position_array[:,0]) - np.min(np_position_array[:,0])
+        self.height = np.max(np_position_array[:,1]) - np.min(np_position_array[:,1])
+        self.depth = np.max(np_position_array[:,2]) - np.min(np_position_array[:,2])
+        self.diameter = np.sqrt(self.width**2+ self.height**2 + self.depth**2)
 
 
     def create_graph(self, np_position_array):
@@ -45,7 +50,7 @@ class Meshgrid:
         return G
 
 
-
+    
     def get_ring_neighbors(self, node_idx, max_dist):
         '''
         Returns a list of coordinates contained in the ring_neighborhood
@@ -79,7 +84,7 @@ class Meshgrid:
         idx = 0
         return self.points[neighbor_indices], idx
 
-
+   
     def get_k_nearest_neighbors(self, node_idx, k):
         '''
         Returns a list of coordinates of the k nearest neighbors and the node itself (k+1 points)
@@ -92,7 +97,7 @@ class Meshgrid:
         idx = np.argwhere(indices==node_idx)[0][0]
         return self.points[indices], idx
 
-
+    
     def get_distance_neighbors(self, node_idx, distance):
         '''
         Returns a list of coordinates of a spatial neighborhood
@@ -105,8 +110,50 @@ class Meshgrid:
         idx = np.argwhere(indices==node_idx)[0][0]
         return self.points[indices], idx
 
+    def get_interest_points(self,sel_mod ="rel", sel_args = {'thresh': 0.01},neigh_flag = 'ring', neigh_args = None, k_harris = 0.04, index=False ):
+        self.compute_all_harris_responses( neigh_flag = neigh_flag, neigh_args= neigh_args,  k_harris = k_harris )
+        interest_points = None
+        if sel_mod == 'rel': 
+            interest_points, ip_idx = self.interest_selection_relative(threshold_factor = sel_args['thresh'])
+        elif sel_mod == 'distr': 
+            interest_points = self.interest_selection_distributed(threshold_factor = sel_args['thresh'])
+        else: 
+            raise ValueError("Unknown interest points selection method")
+        if index: 
+            #Returns interest points and index
+            return interest_points, ip_idx
+        else:
+            #Returns only interest points 
+            return interest_points
+    
+    def interest_selection_relative(self,threshold_factor = 0.01): 
+        #Returns all points that 
+        assert threshold_factor <= 1.0
+        assert self.harris_values.shape[0] > 0
+        idx_sorted = np.argsort(self.harris_values)[::-1] #Gives back the indices for descending order
+        number_sampled_points = max(1,int(threshold_factor * self.harris_values.shape[0]))
+        interest_points_idx = idx_sorted[:number_sampled_points]
+        assert interest_points_idx.shape[0] > 0
+        interest_points = self.points[interest_points_idx]
+        self.interest_points_relative = interest_points
+        return interest_points, interest_points_idx
+    def interest_selection_distributed(self, threshold_factor):
+        #Returns the interested points, selected based on the distance to already
+        # sampled interest points (threshold factor gives the relation to the diameter of the object)
+        threshold = self.diameter * threshold_factor
+        idx_sorted = np.argsort(self.harris_values)[::-1] #Gives back the indices for descending order
+        interest_points = np.expand_dims(self.points[idx_sorted[0]],0)
+        for idx in idx_sorted[1:]: 
+                new_position = np.expand_dims(self.points[idx], 0) 
 
-    def compute_all_harris_responses(self, neighborhood_method):
+                differences = np.any(np.linalg.norm(interest_points - new_position, axis = 1) < threshold)
+                if not differences: 
+                    interest_points = np.vstack((interest_points, new_position))
+        self.interest_points_distributed = interest_points
+        return interest_points
+    
+    
+    def compute_all_harris_responses(self, neigh_flag = 'ring', neigh_args = None,  k_harris = 5 ):
 
         '''
         Loop of point_cloud_2_harris_response for all points
@@ -117,13 +164,26 @@ class Meshgrid:
         num_points = self.points.shape[0]
         self.harris_values = np.zeros(num_points)
         for idx in range(num_points):
-            # TODO: How to choose and call neighborhood method?
-            neighborhood, new_idx = neighborhood_method(idx)
-            harris = point_cloud_2_harris_response(neighborhood, new_idx)
+            if neigh_flag == 'ring': 
+                max_dist = neigh_args['max_dist']
+                neighborhood, new_idx = self.get_ring_neighbors(idx, max_dist)
+            elif neigh_flag == 'k': 
+                k = neigh_args['k']
+                neighborhood, new_idx = self.get_k_nearest_neighbors(idx, k)
+            elif neigh_flag == 'dist':
+                distance = neigh_args['distance'] * self.diameter 
+                neighborhood, new_idx = self.get_distance_neighbors(idx, distance)
+            else: 
+                raise ValueError("Unknown neighborhood method")
+            
+            assert not np.all(np.isnan(neighborhood)) and not np.all(np.isinf(neighborhood))
+            if neighborhood.shape[0] == 0: 
+                print(neighborhood)
+            #print(neighborhood)
+            harris = point_cloud_2_harris_response(neighborhood, new_idx,k_harris)
             self.harris_values[idx] = harris
 
         return harris
-
 
 def compute_normal(points):
     '''
@@ -131,7 +191,8 @@ def compute_normal(points):
     Performs a PCA and returns the eigenvector corresponding to the smallest singularvalue
     '''
     # Center data
-    centroid = np.mean(points, axis=0)
+    centroid = np.mean(points, 0)
+    
     points_centered = points - centroid[None,:]
     # Compute covariance matrix
     cov = 1/points.shape[0] * points_centered.T @ points_centered
@@ -154,7 +215,6 @@ def get_rotation(src, tgt):
     return Rotation.from_rotvec(v*alpha)
 
 
-
 def normalize_point_cloud(points, idx_v):
     '''
     Centration on centroid,
@@ -166,7 +226,8 @@ def normalize_point_cloud(points, idx_v):
     '''
 
     # center on centroid
-    centroid = np.mean(points, axis=0)
+    centroid = np.mean(points, 0)
+    
     new_points = points
     new_points -= centroid
 
@@ -178,7 +239,6 @@ def normalize_point_cloud(points, idx_v):
     # center on v
     new_points -= new_points[idx_v]
     return new_points
-
 
 def fit_quadratic_surface(points):
     '''
@@ -193,7 +253,6 @@ def fit_quadratic_surface(points):
         matrix[:, k] = points[:,0]**i * points[:,1]**j
     m, _, _, _ = scipy.linalg.lstsq(matrix, points[:,2])
     return m
-
 
 
 def point_cloud_2_harris_response(neighborhood, idx_v, k):

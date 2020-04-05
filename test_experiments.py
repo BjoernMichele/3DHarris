@@ -269,7 +269,7 @@ class Experiment:
 
         #Local holes, Micro Hole
        
-        hole_size = 0.001
+        hole_size = 0.01 * self.mesh_objects.diameter
         combinations = [(5,hole_size),(10,hole_size),(20,hole_size),(50,hole_size),(75,hole_size),(100,hole_size)]
         micro_holes_list = []
         path_micro_holes = os.path.join(path,"micro_holes/")
@@ -286,7 +286,7 @@ class Experiment:
 
         #Local holes, Holes
         
-        combinations = [(20,0.0001),(20,0.0005),(20,0.001),(20,0.01)]
+        combinations = [(20,0.0001 * self.mesh_objects.diameter),(20,0.0005 * self.mesh_objects.diameter),(20,0.001 * self.mesh_objects.diameter),(20,0.005 * self.mesh_objects.diameter),(20,0.01*  self.mesh_objects.diameter)]
         holes_list = []
         path_holes = os.path.join(path,"holes/")
         for combination in combinations:

@@ -153,7 +153,7 @@ class Meshgrid:
         return interest_points
     
     
-    def compute_all_harris_responses(self, neigh_flag = 'ring', neigh_args = None,  k_harris = 5 ):
+    def compute_all_harris_responses(self, neigh_flag = 'ring', neigh_args = None,  k_harris = 0.04 ):
 
         '''
         Loop of point_cloud_2_harris_response for all points
@@ -165,7 +165,7 @@ class Meshgrid:
         self.harris_values = np.zeros(num_points)
         for idx in range(num_points):
             if neigh_flag == 'ring': 
-                max_dist = neigh_args['max_dist']
+                max_dist = neigh_args['max_dist'] * self.diameter
                 neighborhood, new_idx = self.get_ring_neighbors(idx, max_dist)
             elif neigh_flag == 'k': 
                 k = neigh_args['k']
@@ -227,7 +227,7 @@ def normalize_point_cloud(points, idx_v):
 
     # center on centroid
     centroid = np.mean(points, 0)
-    
+    print("Centroid {}".format(centroid))
     new_points = points
     new_points -= centroid
 

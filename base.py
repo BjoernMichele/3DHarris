@@ -6,15 +6,20 @@ from scipy.spatial.transform import Rotation
 import numpy as np
 from numba import jit
 import numba
-#Taken from https://stackoverflow.com/questions/12374781/how-to-find-all-neighbors-of-a-given-point-in-a-delaunay-triangulation-using-sci?rq=1
+
+
+
+
 def find_neighbors(pindex, triang):
+    #Taken from https://stackoverflow.com/questions/12374781/how-to-find-all-neighbors-of-a-given-point-in-a-delaunay-triangulation-using-sci?rq=1
     return triang.vertex_neighbor_vertices[1][triang.vertex_neighbor_vertices[0][pindex]:triang.vertex_neighbor_vertices[0][pindex+1]]
 
 
-
+#This class provides the basic functions for the Harris response value calculation, different local neighborhood selections, local neighborhood normalization and quadratic surface
+# approximation. 
 class Meshgrid:
     
-    def __init__(self,np_position_array, graph = None):
+    def __init__(self,np_position_array, graph = None, diameter_set=None):
         #Param: np_position_array:
         self.points = np_position_array
         self.np_position_array = np_position_array
@@ -24,14 +29,16 @@ class Meshgrid:
             self.graph = graph
         self.kdtree = None
         self.harris_values = None
-        self.calculate_size(self.points)
+        self.calculate_size(self.points, diameter_set)
 
-    def calculate_size(self, np_position_array): 
+    def calculate_size(self, np_position_array, diameter_set): 
         self.width = np.max(np_position_array[:,0]) - np.min(np_position_array[:,0])
         self.height = np.max(np_position_array[:,1]) - np.min(np_position_array[:,1])
         self.depth = np.max(np_position_array[:,2]) - np.min(np_position_array[:,2])
-        self.diameter = np.sqrt(self.width**2+ self.height**2 + self.depth**2)
-
+        if diameter_set is None: 
+            self.diameter = np.sqrt(self.width**2+ self.height**2 + self.depth**2)
+        else: 
+            self.diameter = diameter_set
 
     def create_graph(self, np_position_array):
         #Create the Delauny Triangulation
@@ -166,12 +173,14 @@ class Meshgrid:
         for idx in range(num_points):
             if neigh_flag == 'ring': 
                 max_dist = neigh_args['max_dist'] * self.diameter
+                #print("Max dist {}".format(max_dist))
                 neighborhood, new_idx = self.get_ring_neighbors(idx, max_dist)
             elif neigh_flag == 'k': 
                 k = neigh_args['k']
                 neighborhood, new_idx = self.get_k_nearest_neighbors(idx, k)
             elif neigh_flag == 'dist':
-                distance = neigh_args['distance'] * self.diameter 
+                distance = neigh_args['distance'] * self.diameter
+                #print("L2 distance {}".format(distance)) 
                 neighborhood, new_idx = self.get_distance_neighbors(idx, distance)
             else: 
                 raise ValueError("Unknown neighborhood method")
@@ -184,6 +193,39 @@ class Meshgrid:
             self.harris_values[idx] = harris
 
         return harris
+
+    def compute_all_harris_responses_debug(self, idx ,neigh_flag = 'ring', neigh_args = None,  k_harris = 0.04 ):
+
+        '''
+        Loop of point_cloud_2_harris_response for all points
+
+        Debug functions, and therefore returns intermediate results
+        '''
+
+        num_points = self.points.shape[0]
+        self.harris_values = np.zeros(num_points)
+        
+        if neigh_flag == 'ring': 
+            max_dist = neigh_args['max_dist'] * self.diameter
+            neighborhood, new_idx = self.get_ring_neighbors(idx, max_dist)
+        elif neigh_flag == 'k': 
+            k = neigh_args['k']
+            neighborhood, new_idx = self.get_k_nearest_neighbors(idx, k)
+        elif neigh_flag == 'dist':
+            distance = neigh_args['distance'] * self.diameter 
+            neighborhood, new_idx = self.get_distance_neighbors(idx, distance)
+        else: 
+            raise ValueError("Unknown neighborhood method")
+        
+        assert not np.all(np.isnan(neighborhood)) and not np.all(np.isinf(neighborhood))
+        if neighborhood.shape[0] == 0: 
+            print(neighborhood)
+        #print(neighborhood)
+        orig_neighborhood = np.copy(neighborhood)
+        centroid, normal, harris,normalized_neighborhood,new_points_before_centered, p = point_cloud_2_harris_response(neighborhood, new_idx,k_harris, debug = True)
+        self.harris_values[idx] = harris
+
+        return harris,neighborhood,orig_neighborhood, centroid, normal,normalized_neighborhood,new_points_before_centered,p,new_idx, self.graph
 
 def compute_normal(points):
     '''
@@ -215,7 +257,7 @@ def get_rotation(src, tgt):
     return Rotation.from_rotvec(v*alpha)
 
 
-def normalize_point_cloud(points, idx_v):
+def normalize_point_cloud(points, idx_v, debug = False):
     '''
     Centration on centroid,
     PCA,
@@ -227,7 +269,6 @@ def normalize_point_cloud(points, idx_v):
 
     # center on centroid
     centroid = np.mean(points, 0)
-    print("Centroid {}".format(centroid))
     new_points = points
     new_points -= centroid
 
@@ -237,7 +278,10 @@ def normalize_point_cloud(points, idx_v):
     new_points = R.apply(new_points)
 
     # center on v
+    new_points_before_centered = np.copy(new_points)
     new_points -= new_points[idx_v]
+    if debug: 
+        return centroid, normal, new_points, new_points_before_centered
     return new_points
 
 def fit_quadratic_surface(points):
@@ -255,7 +299,7 @@ def fit_quadratic_surface(points):
     return m
 
 
-def point_cloud_2_harris_response(neighborhood, idx_v, k):
+def point_cloud_2_harris_response(neighborhood, idx_v, k, debug = False):
     '''
     calls neighborhood normalization
     calls surface fitting
@@ -263,7 +307,11 @@ def point_cloud_2_harris_response(neighborhood, idx_v, k):
 
     returns Harris response
     '''
-    normalized_neighborhood = normalize_point_cloud(neighborhood, idx_v)
+    if debug: 
+        centroid, normal, normalized_neighborhood,new_points_before_centered= normalize_point_cloud(neighborhood, idx_v, debug = True)
+        
+    else: 
+        normalized_neighborhood = normalize_point_cloud(neighborhood, idx_v)
     p = fit_quadratic_surface(normalized_neighborhood)
 
     # See paper, formulas (10)-(12)
@@ -272,4 +320,8 @@ def point_cloud_2_harris_response(neighborhood, idx_v, k):
     C = p[3]*p[4] + 2*p[0]*p[1] + 2*p[1]*p[2]
     E = np.array([[A,C],[C,B]])
     harris = (A*B-C**2) - k*((A+B)**2) # det(E) - k*(trace(E)**2)
-    return harris
+    
+    if debug:
+        return centroid, normal, harris,normalized_neighborhood,new_points_before_centered, p
+    else:
+        return harris

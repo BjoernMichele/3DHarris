@@ -10,18 +10,23 @@ from numba import jit
 import numba
 import os 
 
+
+##This file contains the experiment class, which is the basic class for the experiments
+##The derived class Experiment_move is used to load the cat and human mesh grids, points and to perform the non-rigid transformations
+
 class Experiment: 
     def __init__(self,path_file, sel_mod = "rel", self_args = {'thresh': 0.01},\
          neigh_args = {'k':10}, neigh_flag = "k", k_harris = 0.04): 
         data = ply.read_ply(path_file)
         pos = np.stack([data['x'],data['y'], data['z']]).T #Positions: Nx3
         self.mesh_objects =base.Meshgrid(pos)
-        self.repeatbiliy_thresh = self.mesh_objects.diameter * 0.01
+        self.repeatbiliy_thresh = self.mesh_objects.diameter * self_args['thresh']
         self.sel_mod = sel_mod
         self.sel_args = self_args
         self.neigh_args = neigh_args
         self.neigh_flag = neigh_flag 
         self.k_harris = k_harris 
+        
         assert not np.all(np.isnan(pos)) and not np.all(np.isinf(pos))
 
     def roation_transformation(self, mesh_object, angle,write_ply = False, path = "base"):
@@ -35,7 +40,7 @@ class Experiment:
         r = R.from_euler('xyz',rotations, degrees=True)
         r_inverse = R.from_euler('zyx', inverse_rotations, degrees=True)
 
-        rotated_mesh =  base.Meshgrid(r.apply(mesh_object.points)) #Frage ob man auch den Graphen neu berechnen sollte, eigt ja schon
+        rotated_mesh =  base.Meshgrid(r.apply(mesh_object.points)) 
         interest_points = rotated_mesh.get_interest_points(sel_mod =self.sel_mod,\
             sel_args = self.sel_args,neigh_flag = self.neigh_flag, neigh_args = self.neigh_args,\
                  k_harris = self.k_harris)
@@ -198,6 +203,52 @@ class Experiment:
         repeatbility = float(np.sum(bool_mask)) / float(ori_ip.shape[0])
         return repeatbility
 
+    def rotation_test(self, write_ply = False, path = "base"):
+        #Original interest points
+        interest_points =  self.mesh_objects.get_interest_points(sel_mod =self.sel_mod,\
+            sel_args = self.sel_args,neigh_flag = self.neigh_flag, neigh_args = self.neigh_args,\
+                 k_harris = self.k_harris)
+
+        if write_ply: 
+            path_all = os.path.join(path, "base_all")
+            path_tmp = os.path.join(path, "base_int")
+
+            ply.write_ply(path_all, self.mesh_objects.points, ['x','y', 'z'])
+            ply.write_ply(path_tmp, interest_points, ['x','y', 'z'])
+        #Angle repeatability
+        path_angle = os.path.join(path,"angle/")
+        angle_repeat_list_x = []
+        angles = [[1,0,0],[5,0,0], [10,0,0], [15,0,0],[20,0,0],[30,0,0],[45,0,0],[75,0,0],[90,0,0],[120,0,0],[150,0,0],[180,0,0]]
+        
+        for angle in angles:
+            angle = np.array(angle)
+            path_angle_tmp = path_angle + str(angle[1])
+            interest_points_rotated = self.roation_transformation(self.mesh_objects, angle,write_ply = write_ply, path=path_angle_tmp)
+            #Calculate repeatability
+            
+            repeatability_value = self.calc_repeatability_reverse(interest_points, interest_points_rotated,self.repeatbiliy_thresh)
+            angle_repeat_list_x.append(repeatability_value)
+            print("Rep value angle{}".format(repeatability_value))
+        
+
+        
+        print("Path angle {}".format(path_angle))
+        angle_repeat_list_z = []
+        angles = [[0,0,1],[0,0,5], [0,0,10], [0,0,15],[0,0,20],[0,0,30],[0,0,45],[0,0,75],[0,0,90],[0,0,120],[0,0,150],[0,0,180]]
+        
+        for angle in angles:
+            angle = np.array(angle)
+            path_angle_tmp = path_angle + str(angle[1])
+            interest_points_rotated = self.roation_transformation(self.mesh_objects, angle,write_ply = write_ply, path=path_angle_tmp)
+            #Calculate repeatability
+            
+            repeatability_value = self.calc_repeatability_reverse(interest_points, interest_points_rotated,self.repeatbiliy_thresh)
+            angle_repeat_list_z.append(repeatability_value)
+            print("Rep value angle{}".format(repeatability_value))
+        
+        return_values={"angle_x":angle_repeat_list_x, "angle_y":angle_repeat_list_z}
+        return return_values
+
     def test_pipeline(self, write_ply = False, path = "base"):
         #Original interest points
         interest_points =  self.mesh_objects.get_interest_points(sel_mod =self.sel_mod,\
@@ -215,6 +266,7 @@ class Experiment:
         print("Path angle {}".format(path_angle))
         angle_repeat_list = []
         angles = [[0,1,0],[0,5,0], [0,10,0], [0,15,0],[0,20,0],[0,30,0],[0,45,0],[0,75,0],[0,90,0],[0,120,0],[0,150,0],[0,180,0]]
+        
         for angle in angles:
             angle = np.array(angle)
             path_angle_tmp = path_angle + str(angle[1])
@@ -226,7 +278,7 @@ class Experiment:
             print("Rep value angle{}".format(repeatability_value))
 
         scale_list = []
-        scale_factors = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5]
+        scale_factors = [0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0]
         path_scale = os.path.join(path,"scale/")
         for scale_factor in scale_factors:
             path_scale_tmp = path_scale + str(scale_factor)
@@ -237,65 +289,90 @@ class Experiment:
 
         translation = np.array([10.0, 20.0, -15.0])
         path_transl = os.path.join(path,"translation/")
+        repeatability_value_transl= []
         interest_points_translated = self.translation_transformation(self.mesh_objects, translation,write_ply= write_ply, path= path_transl)
         repeatability_value_transl = self.calc_repeatability_reverse(interest_points, interest_points_translated,self.repeatbiliy_thresh)
         print("Rep. value transl {}".format(repeatability_value_transl))
 
         #Subsampling (grid resolution)
-        grid_resolutions = [0.0001, 0.001,0.0025, 0.005, 0.0075, 0.01,0.05, 0.1]
-        subsampling_list = []
-        path_subs = os.path.join(path,"subsampling/")
-        for grid_resolution in grid_resolutions:
-            path_subs_tmp = path_subs + str(grid_resolution)
+        try:
+            grid_resolutions = [0.0001, 0.001,0.0025, 0.005, 0.0075, 0.01,0.05, 0.1]
+            subsampling_list = []
+            path_subs = os.path.join(path,"subsampling/")
+            for grid_resolution in grid_resolutions:
+                path_subs_tmp = path_subs + str(grid_resolution)
 
-            grid_size = self.mesh_objects.diameter * grid_resolution
-            interest_points_subsampled = self.grid_subsampling_transformation( self.mesh_objects, grid_size, write_ply=write_ply, path=path_subs_tmp)
+                grid_size = self.mesh_objects.diameter * grid_resolution
+                interest_points_subsampled = self.grid_subsampling_transformation( self.mesh_objects, grid_size, write_ply=write_ply, path=path_subs_tmp)
+                
+                repeatability_value_subsampled = self.calc_repeatability_reverse(interest_points, interest_points_subsampled, self.repeatbiliy_thresh)
+                print("Subsampled rep. value {}".format(repeatability_value_subsampled))
+                subsampling_list.append(repeatability_value_subsampled)
+        except Exception as e: 
             
-            repeatability_value_subsampled = self.calc_repeatability_reverse(interest_points, interest_points_subsampled, grid_size * 1.5)
-            print("Subsampled rep. value {}".format(repeatability_value_subsampled))
-            subsampling_list.append(repeatability_value_subsampled)
+            print("!!!!!!Subsampling failed!!!!!!!!!!!")
+            print(e)
 
         #Gaussian noise
-        noise_levels = [0.1, 0.25, 0.5,  0.75, 1.0,1.25 ,1.5,1.75, 2.0,2.5 ]
-        noise_list = []
-        absolute_noise_factor = 0.001
-        path_noise = os.path.join(path,"noise/")
-        for noise_level in noise_levels:
-            path_noise_tmp = path_noise + str(noise_level)
-            interest_points_noise = self.gaus_noise_transformation(self.mesh_objects, noise_level, absolute_noise_factor,write_ply = write_ply, path = path_noise_tmp)
-            repeatability_value_noise = self.calc_repeatability_reverse(interest_points, interest_points_noise, self.repeatbiliy_thresh)
-            noise_list.append(repeatability_value_noise)
-            print("Subsampled nosie. value {}".format(repeatability_value_noise))
+        try:
+             noise_levels = [0.1, 0.25, 0.5,  0.75, 1.0,1.25 ,1.5,1.75, 2.0,2.5 ]
+             noise_list = []
+            absolute_noise_factor = 0.001
+            path_noise = os.path.join(path,"noise/")
+            for noise_level in noise_levels:
+                path_noise_tmp = path_noise + str(noise_level)
+                interest_points_noise = self.gaus_noise_transformation(self.mesh_objects, noise_level, absolute_noise_factor,write_ply = write_ply, path = path_noise_tmp)
+                repeatability_value_noise = self.calc_repeatability_reverse(interest_points, interest_points_noise, self.repeatbiliy_thresh)
+                noise_list.append(repeatability_value_noise)
+                print("Subsampled nosie. value {}".format(repeatability_value_noise))
+        except Exception as e: 
+            
+            print("!!!!!!!Gaussian failed!!!!!!!!!!")
+            print(e)
 
         #Local holes, Micro Hole
-       
-        hole_size = 0.01 * self.mesh_objects.diameter
-        combinations = [(5,hole_size),(10,hole_size),(20,hole_size),(50,hole_size),(75,hole_size),(100,hole_size)]
-        micro_holes_list = []
-        path_micro_holes = os.path.join(path,"micro_holes/")
-        for combination in combinations:
-            nb_holes, hole_size = combination
-            path_micro_holes_tmp = path_micro_holes + str(nb_holes)
-            interest_points_holes = self.local_holes_transformation( self.mesh_objects, nb_holes = nb_holes, hole_size = hole_size, write_ply = write_ply, path = path_micro_holes_tmp)
-            repeatability_value_holes = self.calc_repeatability_reverse(interest_points, interest_points_holes, self.repeatbiliy_thresh)
-            print("Holes {}".format(repeatability_value_holes))
-            micro_holes_list.append(repeatability_value_holes)
-        
+        try:
+            hole_size = 0.01 * self.mesh_objects.diameter
+            combinations = [(5,hole_size),(10,hole_size),(20,hole_size),(50,hole_size),(75,hole_size),(100,hole_size)]
+            micro_holes_list = []
+            path_micro_holes = os.path.join(path,"micro_holes/")
+            for combination in combinations:
+                tmp_avg = []
+                for tmp_i in range(5):
+                    nb_holes, hole_size = combination
+                    path_micro_holes_tmp = path_micro_holes + str(nb_holes)
+                    interest_points_holes = self.local_holes_transformation( self.mesh_objects, nb_holes = nb_holes, hole_size = hole_size, write_ply = write_ply, path = path_micro_holes_tmp)
+                    repeatability_value_holes = self.calc_repeatability_reverse(interest_points, interest_points_holes, self.repeatbiliy_thresh)
+                    print("Holes {}, i {}".format(repeatability_value_holes, tmp_i))
+                    tmp_avg.append(repeatability_value_holes)
+                repeatability_value_holes = sum(tmp_avg)*1.0/5.0
+                micro_holes_list.append(repeatability_value_holes)
+        except  Exception as e: 
+            print("!!!Micro holes failed !!!")
+            print(e)    
        
 
 
         #Local holes, Holes
-        
-        combinations = [(20,0.0001 * self.mesh_objects.diameter),(20,0.0005 * self.mesh_objects.diameter),(20,0.001 * self.mesh_objects.diameter),(20,0.005 * self.mesh_objects.diameter),(20,0.01*  self.mesh_objects.diameter)]
-        holes_list = []
-        path_holes = os.path.join(path,"holes/")
-        for combination in combinations:
-            nb_holes, hole_size = combination
-            path_holes_tmp = path_holes + str(hole_size)
-            interest_points_holes = self.local_holes_transformation( self.mesh_objects, nb_holes = nb_holes, hole_size = hole_size, write_ply= write_ply, path = path_holes_tmp)
-            repeatability_value_holes = self.calc_repeatability_reverse(interest_points, interest_points_holes, self.repeatbiliy_thresh)
-            print("Holes {}".format(repeatability_value_holes))
-            holes_list.append(repeatability_value_holes)
+        try:
+            combinations = [(20,0.0001 * self.mesh_objects.diameter),(20,0.0005 * self.mesh_objects.diameter),(20,0.001 * self.mesh_objects.diameter),(20,0.005 * self.mesh_objects.diameter),(20,0.01*  self.mesh_objects.diameter), (20, 0.1*self.mesh_objects.diameter)]
+            holes_list = []
+            path_holes = os.path.join(path,"holes/")
+            for combination in combinations:
+                tmp_avg = []
+                for tmp_i in range(5):
+                    nb_holes, hole_size = combination
+                    path_holes_tmp = path_holes + str(hole_size)
+                    interest_points_holes = self.local_holes_transformation( self.mesh_objects, nb_holes = nb_holes, hole_size = hole_size, write_ply= write_ply, path = path_holes_tmp)
+                    repeatability_value_holes = self.calc_repeatability_reverse(interest_points, interest_points_holes, self.repeatbiliy_thresh)
+                    tmp_avg.append(repeatability_value_holes)
+                    
+                    print("Holes {}, i {}".format(repeatability_value_holes, tmp_i))
+                repeatability_value_holes = sum(tmp_avg)*1.0/5.0
+                holes_list.append(repeatability_value_holes)
+        except Exception as e: 
+            print("Local holes failed ")
+            print(e)    
         
         result_list = {"angle":angle_repeat_list,
                         "scale": scale_list,
@@ -309,11 +386,17 @@ class Experiment:
 
 class Experiment_move(Experiment): 
     def __init__(self,path_file, sel_mod = "rel", self_args = {'thresh': 0.01},\
-         neigh_args = {'k':10}, neigh_flag = "k", k_harris = 0.04): 
+         neigh_args = {'k':10}, neigh_flag = "k", k_harris = 0.04, graph_use = True): 
         
         pos, G = self.move_data(path_file)
-        self.mesh_objects =base.Meshgrid(pos, G)
-        self.repeatbiliy_thresh = self.mesh_objects.diameter * 0.01
+        if graph_use:
+            #The original graph (mesh of the object) should be used
+            self.mesh_objects =base.Meshgrid(pos, G)
+        else:
+            #Create the graph with Delauda 
+            print("Don't use the original graph")
+            self.mesh_objects =base.Meshgrid(pos)
+        self.repeatbiliy_thresh = self.mesh_objects.diameter * self_args['thresh']
         self.sel_mod = sel_mod
         self.sel_args = self_args
         self.neigh_args = neigh_args
@@ -338,14 +421,15 @@ class Experiment_move(Experiment):
         return vert, G
 
 
-    def test_pipeline_move(self, path_file_tmps = [],write_ply = False):
-        #Original interest points
+    def test_pipeline_move(self, path_file_tmps = [],write_ply = False, keep_diameter=False):
+        #Used to test the non-rigid transformations
         interest_points, _ =  self.mesh_objects.get_interest_points(sel_mod =self.sel_mod,\
             sel_args = self.sel_args,neigh_flag = self.neigh_flag, neigh_args = self.neigh_args,\
                  k_harris = self.k_harris, index = True)
         
         basename = path_file_tmps[0].split("/")[-1]
         basename = os.path.join("visualisation", basename) 
+        print(basename)
         if write_ply: 
             ply.write_ply(basename, interest_points, ['x', 'y', 'z'])
         
@@ -355,7 +439,11 @@ class Experiment_move(Experiment):
         for path_file_tmp in path_file_tmps:  
             print("Path file tmp {}".format(path_file_tmp))
             pos_tmp, G_tmp = self.move_data(path_file_tmp)
-            mesh_object_tmp =base.Meshgrid(pos_tmp, G_tmp)
+            if keep_diameter:
+                mesh_object_tmp =base.Meshgrid(pos_tmp, G_tmp, diameter_set = self.mesh_objects.diameter)
+            else:
+                mesh_object_tmp =base.Meshgrid(pos_tmp, G_tmp)
+
             assert not np.all(np.isnan(pos_tmp)) and not np.all(np.isinf(pos_tmp))
             ip_moved, interest_points_index =  mesh_object_tmp.get_interest_points(sel_mod =self.sel_mod,\
                 sel_args = self.sel_args,neigh_flag = self.neigh_flag, neigh_args = self.neigh_args,\
@@ -371,19 +459,3 @@ class Experiment_move(Experiment):
             print("Rep {}".format(rep))
             move_list.append(rep)
         return move_list
-if __name__ == "__main__":
-    
-    print("Results K-Neighbors")
-    exp = Experiment("bunny.ply",sel_mod = "rel", self_args = {'thresh': 0.01},\
-         neigh_args = {'k':10}, neigh_flag = "k", k_harris = 0.04)
-    exp.test_pipeline()
-    print("Results Distance")
-    exp2 = Experiment("bunny.ply",sel_mod = "rel", self_args = {'thresh': 0.01},\
-         neigh_args = {'distance':0.01}, neigh_flag = "dist", k_harris = 0.04)
-    exp2.test_pipeline()
-
-    print("Adaptive Ring")
-    exp3 = Experiment("bunny.ply",sel_mod = "rel", self_args = {'thresh': 0.01},\
-         neigh_args = {'max_dist':0.01}, neigh_flag = "ring", k_harris = 0.04)
-    exp3.test_pipeline()
-    #exp3.test_pipeline()

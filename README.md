@@ -8,7 +8,8 @@ Explanations for the code:
 - Base.py:  Includes the basic class which can calculate the Harris response values and selects interest points (for all local neighborhood methods) 
 - test_experiments.py: Includes the class Experiment and Experiment move. These two classes provide everything to run the experiments. 
 - Experiments-Hyperparameter.ipynb: Jupyter notebook which includes the  calculation, saving and visualization of the values for the Hyperparameter selection.
-- Experiments-Transformations.ipynb: Jupyter notebook which includes the calculation, saving and visualization of the values for the transformations experiments. 
+- Experiments-Transformations.ipynb: Jupyter notebook which includes the calculation, saving and visualization of the values for the transformations experiments.
+- Basic shapes.ipynb: Jupyter notebook which includes experiments with the basic forms (pyramid, cube), and the visualization of the intermeidate steps of the interest points selection.  
 
 
 Link to the paper original paper: 
